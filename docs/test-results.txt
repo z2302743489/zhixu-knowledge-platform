@@ -1,0 +1,11 @@
+2026-11-07 final verification
+
+Frontend: npm run build => PASS (TypeScript + Vite)
+Backend: python -m pytest -q => 42 passed in 3.04s
+Dependencies: python -m pip check => No broken requirements found
+Python source: compileall backend/app scripts => PASS
+Fresh SQLite migrations: upgrade head + alembic check => PASS
+Local dev script: migrations + API8010 + Vite5173 + proxy /api/health => HTTP200, children stopped cleanly
+Source ZIP: 78 source/artifact files, SHA-256 manifest and staging/whitespace checks verified
+Docker tags: verified official Docker Hub API metadata, amd64/arm64 available
+Docker runtime / remote cloud account calls / GitHub Actions: NOT RUN

@@ -1,0 +1,86 @@
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  environment:
+    ZHIXU_DATABASE_URL: postgresql+psycopg://zhixu:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/zhixu
+    ZHIXU_DATA_DIR: /data
+    ZHIXU_QDRANT_URL: http://qdrant:6333
+    ZHIXU_REDIS_URL: redis://redis:6379/0
+    ZHIXU_TASK_MODE: celery
+    ZHIXU_SECRET_KEY: ${ZHIXU_SECRET_KEY:?Set ZHIXU_SECRET_KEY in .env}
+    ZHIXU_COOKIE_SECURE: ${ZHIXU_COOKIE_SECURE:-false}
+    ZHIXU_ALLOWED_PRIVATE_HOSTS: ${ZHIXU_ALLOWED_PRIVATE_HOSTS:-}
+  volumes:
+    - files:/data
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    qdrant:
+      condition: service_started
+  restart: unless-stopped
+services:
+  frontend:
+    build: .
+    ports:
+      - "${ZHIXU_BIND_ADDRESS:-127.0.0.1}:${ZHIXU_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+  api:
+    <<: *backend
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  worker:
+    <<: *backend
+    command: ["celery", "-A", "app.tasks:celery_app", "worker", "--loglevel=info", "--concurrency=2"]
+    depends_on:
+      api:
+        condition: service_healthy
+  scheduler:
+    <<: *backend
+    command: ["celery", "-A", "app.tasks:celery_app", "beat", "--loglevel=info", "--schedule=/data/celerybeat-schedule"]
+    depends_on:
+      api:
+        condition: service_healthy
+  postgres:
+    image: postgres:16.15-alpine
+    environment:
+      POSTGRES_USER: zhixu
+      POSTGRES_DB: zhixu
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zhixu -d zhixu"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    volumes:
+      - qdrant:/qdrant/storage
+    restart: unless-stopped
+  redis:
+    image: redis:7.4.7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+volumes:
+  files:
+  postgres:
+  qdrant:
+  redis:

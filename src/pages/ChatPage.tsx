@@ -1,0 +1,46 @@
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Avatar, Button, Input, Select, Tag, Tooltip } from 'antd';
+import { ArrowDownOutlined, ArrowUpOutlined, BookOutlined, CopyOutlined, DatabaseOutlined, FileTextOutlined, InfoCircleOutlined, LoadingOutlined, MessageOutlined, PlusOutlined, StopOutlined, ThunderboltFilled } from '@ant-design/icons';
+import { api, streamChat } from '../api';
+import type { ChatMessage, Reference } from '../types';
+import { statusLabel, useWorkspace } from '../workspace';
+import { SourceDrawer } from './KnowledgePage';
+
+export default function ChatPage() {
+  const { data, role, run, refresh, go } = useWorkspace();
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [assistantId, setAssistantId] = useState(() => { try { return sessionStorage.getItem('zhixu-assistant') || ''; } catch { return ''; } });
+  const [question, setQuestion] = useState(''); const [streaming, setStreaming] = useState(false); const [liveMessages, setLiveMessages] = useState<ChatMessage[] | null>(null); const [reference, setReference] = useState<Reference | null>(null);
+  const controller = useRef<AbortController | null>(null); const runId = useRef(''); const alive = useRef(true); const end = useRef<HTMLDivElement>(null);
+  const published = data.assistants.filter(assistant => assistant.published); const assistant = published.find(item => item.id === assistantId) || published[0]; const session = data.sessions.find(item => item.id === sessionId); const messages = liveMessages ?? session?.messages ?? [];
+  useEffect(() => { if (!published.some(item => item.id === assistantId)) setAssistantId(published[0]?.id || ''); }, [data.assistants]);
+  useEffect(() => { end.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [messages.at(-1)?.text, sessionId]);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; if (runId.current) void api.post(`/chat/${runId.current}/cancel`).catch(() => undefined); controller.current?.abort(); }; }, []);
+  async function stop() { if (runId.current) await run(() => api.post(`/chat/${runId.current}/cancel`)); controller.current?.abort(); }
+  function newChat() { if (streaming) return; setSessionId(null); setLiveMessages(null); setQuestion(''); }
+  async function send(value = question) {
+    if (!value.trim() || streaming || !assistant) return;
+    const abort = new AbortController(); controller.current = abort; runId.current = ''; setStreaming(true); setQuestion('');
+    setLiveMessages([...(session?.messages || []), { id: `pending-user-${Date.now()}`, role: 'user', text: value }, { id: 'pending-answer', role: 'assistant', text: '', refs: [], status: 'running' }]);
+    let serverError = false;
+    const update = (patch: Partial<ChatMessage> | ((last: ChatMessage) => Partial<ChatMessage>)) => { if (alive.current) setLiveMessages(previous => previous ? [...previous.slice(0, -1), { ...previous[previous.length - 1], ...(typeof patch === 'function' ? patch(previous[previous.length - 1]) : patch) }] : previous); };
+    await run(async () => {
+      try {
+        await streamChat({ assistantId: assistant.id, sessionId: sessionId || undefined, question: value.trim() }, abort.signal, (event, item) => {
+          if (!alive.current) return;
+          if (event === 'meta') { setSessionId(String(item.sessionId)); runId.current = String(item.runId || ''); if (item.messageId) update({ id: String(item.messageId) }); }
+          if (event === 'delta') update(last => ({ text: last.text + String(item.text || '') }));
+          if (event === 'sources') update({ refs: (item.refs || []) as Reference[] });
+          if (event === 'done') update({ status: String(item.status || 'completed'), ...(item.messageId ? { id: String(item.messageId) } : {}), ...(typeof item.text === 'string' ? { text: item.text } : {}), ...(Array.isArray(item.refs) ? { refs: item.refs as Reference[] } : {}) });
+          if (event === 'error') { serverError = true; update({ status: 'failed' }); throw new Error(String(item.message || '本次回答失败')); }
+        });
+      } catch (error) { if (!(error instanceof DOMException && error.name === 'AbortError')) { update({ status: 'failed' }); throw error; } update({ status: 'cancelled' }); }
+      finally {
+        controller.current = null; runId.current = '';
+        if (alive.current) { setStreaming(false); try { await refresh(); if (!serverError) setLiveMessages(null); } catch { /* Keep partial answer if refreshing fails. */ } }
+      }
+    });
+  }
+  async function feedback(id: string, value: 'up' | 'down') { await run(async () => { await api.patch(`/messages/${id}`, { feedback: value }); await refresh(); }, '反馈已保存'); }
+  return <div className="chat-shell"><aside className="session-list"><Button icon={<PlusOutlined />} disabled={streaming} onClick={newChat}>新建对话</Button><div className="small-label">最近对话 · 当前浏览器</div>{data.sessions.map(item => <button key={item.id} disabled={streaming} className={`session-item ${sessionId === item.id ? 'active' : ''}`} onClick={() => { setSessionId(item.id); setAssistantId(item.assistantId); setLiveMessages(null); }}><MessageOutlined /><span>{item.title}</span></button>)}{!data.sessions.length && <p className="muted session-empty">开启对话后，记录会出现在这里</p>}<div className="session-note"><InfoCircleOutlined />由匿名会话标识区分浏览器</div></aside><section className="chat-main"><div className="chat-toolbar"><div><ThunderboltFilled className="mini-spark" /><Select aria-label="问答助手" value={assistant?.id} disabled={streaming || !!sessionId} placeholder="选择问答助手" style={{ minWidth: 180 }} options={published.map(item => ({ value: item.id, label: item.name }))} onChange={setAssistantId} /><Tag color="purple">知识库问答</Tag></div><span className="muted"><DatabaseOutlined /> {assistant?.kbIds.length || 0} 个知识库</span></div><div className="chat-scroll">{!messages.length ? <div className="chat-welcome"><div className="welcome-logo"><ThunderboltFilled /></div><div className="eyebrow">YOUR KNOWLEDGE, CONNECTED</div><h1>{assistant?.greeting || '从企业知识中，找到可靠答案'}</h1><p>{assistant?.description || '管理员发布问答助手后，即可在这里提问。'}</p>{!assistant ? <Alert type="info" showIcon title="暂时没有可用的问答助手" description="请联系知识库管理人员配置知识库、模型并发布助手。" action={role !== 'user' ? <Button onClick={() => go('assistants')}>配置助手</Button> : undefined} /> : <div className="suggestions">{['这份知识库包含哪些内容？', '请说明相关制度的操作流程', '这个问题有哪些资料可以参考？'].map(value => <button key={value} onClick={() => void send(value)}><BookOutlined />{value}<ArrowUpOutlined /></button>)}</div>}<small className="welcome-note">回答附带来源，可查看原文片段</small></div> : <div className="messages">{messages.map((item, index) => <div className={`chat-message ${item.role}`} key={item.id || index}><Avatar style={{ background: item.role === 'user' ? '#edf0f9' : '#efebfb', color: '#8b74ca' }}>{item.role === 'user' ? '我' : <ThunderboltFilled />}</Avatar><div className="message-content"><div className="message-author">{item.role === 'user' ? '你' : assistant?.name || '知识助手'}<span>{statusLabel(item.status)}</span></div><div className="message-body">{item.text || (streaming && index === messages.length - 1 ? <><LoadingOutlined /> 正在检索并生成回答…</> : item.status === 'failed' ? '本次回答未完成，请检查日志或重试。' : '')}</div>{item.refs?.length ? <div className="citation-list">{item.refs.map((ref, refIndex) => <button key={`${ref.chunk.id}-${refIndex}`} onClick={() => setReference(ref)}><span>{refIndex + 1}</span><FileTextOutlined />{ref.name}</button>)}</div> : null}{item.role === 'assistant' && !streaming && <div className="message-actions"><Tooltip title="复制回答"><Button type="text" size="small" aria-label="复制回答" icon={<CopyOutlined />} onClick={() => void run(() => navigator.clipboard.writeText(item.text), '已复制回答')} /></Tooltip><Tooltip title="回答有帮助"><Button type={item.feedback === 'up' ? 'primary' : 'text'} size="small" aria-label="回答有帮助" icon={<ArrowUpOutlined />} onClick={() => void feedback(item.id, 'up')} /></Tooltip><Tooltip title="回答无帮助"><Button type={item.feedback === 'down' ? 'primary' : 'text'} size="small" aria-label="回答无帮助" icon={<ArrowDownOutlined />} onClick={() => void feedback(item.id, 'down')} /></Tooltip><Button type="text" size="small" onClick={() => { const previous = messages.slice(0, index).reverse().find(value => value.role === 'user'); if (previous) void send(previous.text); }}>重新回答</Button></div>}</div></div>)}<div ref={end} /></div>}</div><div className="composer-area"><div className="composer"><Input.TextArea aria-label="提问内容" value={question} onChange={e => setQuestion(e.target.value)} placeholder={assistant ? '向企业知识提问，Shift + Enter 换行' : '等待管理员发布问答助手'} disabled={!assistant} variant="borderless" autoSize={{ minRows: 2, maxRows: 6 }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} /><div className="composer-bottom"><span><DatabaseOutlined />基于已关联的知识库回答</span>{streaming ? <Button icon={<StopOutlined />} aria-label="停止生成" onClick={() => void stop()}>停止生成</Button> : <Button type="primary" shape="circle" icon={<ArrowUpOutlined />} aria-label="发送问题" disabled={!question.trim() || !assistant} onClick={() => void send()} />}</div></div><p>回答由模型生成，请结合引用核实。</p></div></section><SourceDrawer reference={reference} onClose={() => setReference(null)} /></div>;
+}
