@@ -1,8 +1,14 @@
-# 知序 · 企业知识中台
+<p align="center">
+  <img src="./screenshots/github-cover-2026-11-16.jpg" width="100%" alt="知序 · 企业知识库与 AI 问答项目封面" />
+</p>
+
+# 知序 · 企业知识库与 AI 问答平台
 
 GitHub 仓库：[z2302743489/zhixu-knowledge-platform](https://github.com/z2302743489/zhixu-knowledge-platform)
 
-面向企业内部试用的通用知识库项目：导入文件，检查解析片段，构建知识索引，再通过问答助手获取带来源的回答。前端使用 React + TypeScript + Ant Design，后端使用 FastAPI 与 LangChain。
+一个企业知识库与 AI 问答网站，集中管理文档，让员工通过提问获取带资料出处的答案。适合本机验证与受控内网试用。
+
+前端使用 React + TypeScript + Ant Design，后端使用 FastAPI 与 LangChain。
 
 > 本版不做登录，管理员、知识库管理人员、使用者可自由切换。角色用于操作体验，不能替代身份认证。适合本机验证及受控内网试用，部署边界见 [SECURITY.md](SECURITY.md)。
 
